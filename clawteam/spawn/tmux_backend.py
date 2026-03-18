@@ -9,6 +9,7 @@ import subprocess
 import time
 
 from clawteam.spawn.base import SpawnBackend
+from clawteam.spawn.cli_env import build_spawn_path, resolve_clawteam_executable
 
 
 class TmuxBackend(SpawnBackend):
@@ -37,6 +38,7 @@ class TmuxBackend(SpawnBackend):
             return "Error: tmux not installed"
 
         session_name = f"clawteam-{team_name}"
+        clawteam_bin = resolve_clawteam_executable()
         env_vars = {
             "CLAWTEAM_AGENT_ID": agent_id,
             "CLAWTEAM_AGENT_NAME": agent_name,
@@ -56,8 +58,11 @@ class TmuxBackend(SpawnBackend):
             env_vars["CLAWTEAM_WORKSPACE_DIR"] = cwd
         if env:
             env_vars.update(env)
+        env_vars["PATH"] = build_spawn_path(env_vars.get("PATH", os.environ.get("PATH")))
+        if os.path.isabs(clawteam_bin):
+            env_vars.setdefault("CLAWTEAM_BIN", clawteam_bin)
 
-        env_str = " ".join(f"{k}={shlex.quote(v)}" for k, v in env_vars.items())
+        export_str = "; ".join(f"export {k}={shlex.quote(v)}" for k, v in env_vars.items())
 
         # Build the command (without prompt — we'll send it via send-keys)
         final_command = list(command)
@@ -73,17 +78,18 @@ class TmuxBackend(SpawnBackend):
 
         cmd_str = " ".join(shlex.quote(c) for c in final_command)
         # Append on-exit hook: runs immediately when agent process exits
+        exit_cmd = shlex.quote(clawteam_bin) if os.path.isabs(clawteam_bin) else "clawteam"
         exit_hook = (
-            f"clawteam lifecycle on-exit --team {shlex.quote(team_name)} "
+            f"{exit_cmd} lifecycle on-exit --team {shlex.quote(team_name)} "
             f"--agent {shlex.quote(agent_name)}"
         )
         # Unset Claude nesting-detection env vars so spawned claude agents
         # don't refuse to start when the leader is itself a claude session.
         unset_clause = "unset CLAUDECODE CLAUDE_CODE_ENTRYPOINT CLAUDE_CODE_SESSION 2>/dev/null; "
         if cwd:
-            full_cmd = f"{unset_clause}cd {shlex.quote(cwd)} && {env_str} {cmd_str}; {exit_hook}"
+            full_cmd = f"{unset_clause}{export_str}; cd {shlex.quote(cwd)} && {cmd_str}; {exit_hook}"
         else:
-            full_cmd = f"{unset_clause}{env_str} {cmd_str}; {exit_hook}"
+            full_cmd = f"{unset_clause}{export_str}; {cmd_str}; {exit_hook}"
 
         # Check if tmux session exists
         check = subprocess.run(

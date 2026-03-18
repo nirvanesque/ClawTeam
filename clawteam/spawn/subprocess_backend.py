@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import os
+import shlex
 import subprocess
 
 from clawteam.spawn.base import SpawnBackend
+from clawteam.spawn.cli_env import build_spawn_path, resolve_clawteam_executable
 
 
 class SubprocessBackend(SpawnBackend):
@@ -27,6 +29,7 @@ class SubprocessBackend(SpawnBackend):
         skip_permissions: bool = False,
     ) -> str:
         spawn_env = os.environ.copy()
+        clawteam_bin = resolve_clawteam_executable()
         spawn_env.update({
             "CLAWTEAM_AGENT_ID": agent_id,
             "CLAWTEAM_AGENT_NAME": agent_name,
@@ -46,6 +49,9 @@ class SubprocessBackend(SpawnBackend):
             spawn_env["CLAWTEAM_WORKSPACE_DIR"] = cwd
         if env:
             spawn_env.update(env)
+        spawn_env["PATH"] = build_spawn_path(spawn_env.get("PATH"))
+        if os.path.isabs(clawteam_bin):
+            spawn_env.setdefault("CLAWTEAM_BIN", clawteam_bin)
 
         final_command = list(command)
         if skip_permissions:
@@ -61,10 +67,10 @@ class SubprocessBackend(SpawnBackend):
                 final_command.extend(["-p", prompt])
 
         # Wrap with on-exit hook so task status updates immediately on exit
-        import shlex
         cmd_str = " ".join(shlex.quote(c) for c in final_command)
+        exit_cmd = shlex.quote(clawteam_bin) if os.path.isabs(clawteam_bin) else "clawteam"
         exit_hook = (
-            f"clawteam lifecycle on-exit --team {shlex.quote(team_name)} "
+            f"{exit_cmd} lifecycle on-exit --team {shlex.quote(team_name)} "
             f"--agent {shlex.quote(agent_name)}"
         )
         shell_cmd = f"{cmd_str}; {exit_hook}"
